@@ -1,0 +1,173 @@
+3. Mark the Order ID of the order that was delivered with the most delay (in number of days)
+SELECT 
+    order_id,
+    order_delivered_date,
+    order_estimated_delivery_date,
+    (order_delivered_date - order_estimated_delivery_date) AS delay_days
+FROM dbo.ex_orders
+WHERE order_id IN (
+    'CA-2014-100006',
+    'CA-2014-100090',
+    'CA-2014-100293',
+    'CA-2014-100328'
+)
+ORDER BY delay_days DESC
+LIMIT 1;
+
+4. Mark all the statements which are true.
+4.1.As on March 2017, Velocity Logistics delivered all orders on time
+SELECT 
+    COUNT(*) AS total_orders,
+    SUM(CASE WHEN o.order_delivered_date <= o.order_estimated_delivery_date THEN 1 ELSE 0 END) AS on_time_orders
+FROM ex_orders o
+JOIN ex_logistics_partner l 
+  ON o.partner_id = l.partner_id
+WHERE l.partner_name = 'Velocity Logistics'
+  AND DATE_PART('year', o.order_delivered_date) = 2017
+  AND DATE_PART('month', o.order_delivered_date) <= 3
+  AND o.order_status = 'delivered';
+
+4.2. Lowest number of orders were delivered in the month of January.
+SELECT 
+    DATE_PART('month', o.order_delivered_date) AS month,
+    COUNT(*) AS total_orders
+FROM ex_orders o
+WHERE DATE_PART('year', o.order_delivered_date) = 2017
+  AND o.order_status = 'delivered'
+GROUP BY DATE_PART('month', o.order_delivered_date)
+ORDER BY total_orders ASC
+LIMIT 1;
+
+4.3.Seaborn Logistics delivered a total of 210 orders in the year 2017.
+SELECT 
+    COUNT(*) AS total_orders
+FROM ex_orders o
+JOIN ex_logistics_partner l 
+  ON o.partner_id = l.partner_id
+WHERE l.partner_name IN ('Seaborne Ltd.', 'Seaborn Logistics')
+  AND DATE_PART('year', o.order_delivered_date) = 2017
+  AND o.order_status = 'delivered';
+
+5 Which month saw the most number of late deliveries.
+select EXTRACT(MONTH FROM order_delivered_date) as "Month",count(order_id) from dbo.ex_orders 
+where order_status ='delivered' 
+and order_delivered_date>order_estimated_delivery_date
+and DATE_PART('year', order_delivered_date) = 2017
+group by EXTRACT(MONTH FROM order_delivered_date)
+order by "Month";
+
+6. Which vendor has the 2nd best success rate in terms of deliveries.
+WITH vendor_success AS (
+    SELECT
+        l.partner_name,
+        COUNT(*) AS total_deliveries,
+        SUM(CASE 
+                WHEN o.order_status = 'delivered' 
+                     AND o.order_delivered_date <= o.order_estimated_delivery_date 
+                THEN 1 
+                ELSE 0 
+            END) AS on_time_deliveries,
+        SUM(CASE 
+                WHEN o.order_status = 'delivered' 
+                     AND o.order_delivered_date <= o.order_estimated_delivery_date 
+                THEN 1 
+                ELSE 0 
+            END) * 100.0 / COUNT(*) AS success_rate
+    FROM ex_orders o
+    JOIN ex_logistics_partners l
+      ON o.partner_id = l.partner_id
+    GROUP BY l.partner_name
+),
+ranked_vendors AS (
+    SELECT 
+        partner_name,
+        success_rate,
+        RANK() OVER (ORDER BY success_rate DESC) AS rank_order
+    FROM vendor_success
+)
+SELECT partner_name, success_rate
+FROM ranked_vendors
+WHERE rank_order = 2;
+
+7. YTD late deliveries for Seaborn Logistics as on Sep is ____________?
+SELECT 
+    COUNT(*) AS total_orders
+FROM ex_orders o
+JOIN ex_logistics_partner l 
+  ON o.partner_id = l.partner_id
+WHERE l.partner_name IN ('Seaborne Ltd.', 'Seaborn Logistics')
+  AND DATE_PART('year', o.order_delivered_date) = 2017
+  AND o.order_status = 'delivered';
+
+8. If a vendor's %Late Delivery (YTM) is consistently higher than their monthly %Late Delivery, what is a likely cause?
+WITH ytd AS (
+    SELECT 
+        l.partner_name,
+        SUM(CASE WHEN o.order_delivered_date > o.order_estimated_delivery_date 
+                 AND o.order_status = 'delivered' 
+                 THEN 1 ELSE 0 END) * 100.0 / COUNT(*) AS ytd_late_pct
+    FROM ex_orders o
+    JOIN ex_logistics_partner l 
+      ON o.partner_id = l.partner_id
+    WHERE DATE_PART('year', o.order_delivered_date) = 2017
+      AND DATE_PART('month', o.order_delivered_date) <= 9
+    GROUP BY l.partner_name
+),
+monthly AS (
+    SELECT 
+        l.partner_name,
+        SUM(CASE WHEN o.order_delivered_date > o.order_estimated_delivery_date 
+                 AND o.order_status = 'delivered' 
+                 THEN 1 ELSE 0 END) * 100.0 / COUNT(*) AS monthly_late_pct
+    FROM dbo.ex_orders o
+    JOIN dbo.ex_logistics_partners l 
+      ON o.partner_id = l.partner_id
+    WHERE DATE_PART('year', o.order_delivered_date) = 2017
+      AND DATE_PART('month', o.order_delivered_date) = 9
+    GROUP BY l.partner_name
+)
+SELECT 
+    y.partner_name,
+    y.ytd_late_pct,
+    m.monthly_late_pct,
+    CASE 
+       WHEN y.ytd_late_pct > m.monthly_late_pct 
+       THEN 'Improving performance'
+       ELSE 'Not improving'
+    END AS interpretation
+FROM ytd y
+JOIN monthly m 
+  ON y.partner_name = m.partner_name;
+
+9.The Delivery Ops team wants the %Late Delivery calculated only when there are at least 10 orders delivered in a month.
+Considering the above request, pick the top 5 records with the highest %Late Delivery for this Vendor and month combo.
+
+WITH vendor_month AS (
+    SELECT 
+        l.partner_name,
+        DATE_TRUNC('month', o.order_delivered_date)::date AS month_start,
+        COUNT(*) AS total_orders,
+        SUM(CASE WHEN o.order_delivered_date > o.order_estimated_delivery_date 
+                 AND o.order_status = 'delivered' 
+                 THEN 1 ELSE 0 END) AS late_orders
+    FROM dbo.ex_orders o
+    JOIN dbo.ex_logistics_partners l 
+      ON o.partner_id = l.partner_id
+    WHERE DATE_PART('year', o.order_delivered_date) = 2017
+    GROUP BY l.partner_name, DATE_TRUNC('month', o.order_delivered_date)
+),
+filtered AS (
+    SELECT 
+        partner_name,
+        month_start,
+        late_orders,
+        total_orders,
+        (late_orders * 100.0 / total_orders) AS late_pct
+    FROM vendor_month
+    WHERE total_orders >= 10
+)
+SELECT partner_name, month_start, late_pct, total_orders, late_orders
+FROM filtered
+ORDER BY late_pct DESC
+LIMIT 5;
+-------------------------------------------------------------------------------------------
